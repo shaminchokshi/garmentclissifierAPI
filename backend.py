@@ -287,7 +287,7 @@
 
 #---------------------------------------------------------------------------------------------------------------------
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 import boto3
 import os
@@ -345,6 +345,7 @@ index = pc.Index(index_name)
 class ImageRequest(BaseModel):
     image: str  # Base64 encoded image
     prompt: str
+    prompt_instructions: str
 
 def preprocess_image(image: Image.Image):
     return clip_processor(images=image, return_tensors="pt")["pixel_values"]
@@ -355,7 +356,7 @@ def extract_features(image: Image.Image):
         features = clip_model.get_image_features(pixel_values=inputs).flatten().cpu().numpy()
     return features
 
-def find_output_details(prompt: str):
+def find_output_details(prompt: str, prompt_instructions: str):
     categories = {
         'pants': ['pants', 'pant'],
         'shoes': ['shoes', 'shoe'],
@@ -366,9 +367,16 @@ def find_output_details(prompt: str):
     }
     colors = ['black', 'white', 'red', 'blue', 'green', 'yellow', 'purple', 'pink', 'orange', 'brown', 'gray', 'grey']
 
+    number_words = {
+        'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5, 
+        'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 'ten': 10,
+        'eleven': 11, 'twelve': 12, 'thirteen': 13, 'fourteen': 14,
+        'fifteen': 15, 'sixteen': 16, 'seventeen': 17, 'eighteen': 18,
+        'nineteen': 19, 'twenty': 20
+    }
     category = None
     color = ""
-    num_items = 2  # Default number of items
+    num_items = 1  # Default number of items
 
     # Determine the category
     for key, values in categories.items():
@@ -383,6 +391,12 @@ def find_output_details(prompt: str):
     num_items_match = re.search(r'\d+', prompt)
     if num_items_match:
         num_items = int(num_items_match.group())
+    else:
+        # Check for spelled-out numbers
+        for word, num in number_words.items():
+            if word in prompt.lower():
+                num_items = num
+                break
 
     # Ensure at least 1 unique results
     num_items = max(1, num_items)
@@ -392,17 +406,17 @@ def find_output_details(prompt: str):
         if col in prompt.lower():
             color = col
             break
-    print()
+
     return num_items, category, color
 
 @app.post("/get_similar_images/")
 async def get_similar_images_endpoint(request: ImageRequest):
-    print(f"Received request to get similar images with prompt: {request.prompt}")
+    print(f"Received request to get similar images with prompt: {request.prompt} **Instructions:** {request.prompt_instructions}")
     uploaded_image = Image.open(BytesIO(base64.b64decode(request.image)))
     uploaded_image_features = extract_features(uploaded_image)
     
     try:
-        num_items, category, color = find_output_details(request.prompt)
+        num_items, category, color = find_output_details(request.prompt, request.prompt_instructions)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -453,3 +467,4 @@ def get_image_from_s3(key: str):
     print(f"Fetching image {key} from S3...")
     obj = s3_client.get_object(Bucket=BUCKET_NAME, Key=key)
     return Image.open(BytesIO(obj['Body'].read()))
+
